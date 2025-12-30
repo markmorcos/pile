@@ -1,0 +1,50 @@
+version: 0.4.7
+
+namespace: pile
+project: pile
+
+services:
+  - name: web
+    image: ghcr.io/markmorcos/pile
+    port: 3000
+    env:
+      - name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: pile-db
+            key: DATABASE_URL
+
+      - name: FIREBASE_ADMIN_PROJECT_ID
+        valueFrom:
+          secretKeyRef:
+            name: pile-firebase-admin
+            key: PROJECT_ID
+
+      - name: FIREBASE_ADMIN_CLIENT_EMAIL
+        valueFrom:
+          secretKeyRef:
+            name: pile-firebase-admin
+            key: CLIENT_EMAIL
+
+      - name: FIREBASE_ADMIN_PRIVATE_KEY
+        valueFrom:
+          secretKeyRef:
+            name: pile-firebase-admin
+            key: PRIVATE_KEY
+
+      - name: NEXT_PUBLIC_SOCKET_URL
+        value: https://pile.bio
+
+      - name: NEXT_PUBLIC_APP_URL
+        value: https://pile.bio
+
+      - name: CORS_ORIGIN
+        value: https://pile.bio
+
+      - name: NODE_ENV
+        value: production
+
+    ingress:
+      host: pile.bio
+      path: /?(.*)
+      pathType: ImplementationSpecific

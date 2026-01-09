@@ -2,6 +2,9 @@ import { prisma } from '@/lib/prisma'
 import { notFound } from 'next/navigation'
 import Image from 'next/image'
 
+// Force dynamic rendering - middleware handles CDN proxy
+export const dynamic = 'force-dynamic'
+
 interface ProfilePageProps {
   params: {
     slug: string

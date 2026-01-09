@@ -1,5 +1,10 @@
 import { prisma } from "../lib/prisma";
 import axios from "axios";
+import { generateProfileHtml } from "./html-generator";
+import { uploadHtml } from "../lib/storage/s3";
+
+const MAX_RETRIES = 5;
+const MAX_BACKOFF_MS = 60000; // 60 seconds
 
 async function processPublishJob(jobId: string) {
   const job = await prisma.job.findUnique({
@@ -65,16 +70,134 @@ async function processPublishJob(jobId: string) {
           })
         )
       );
+
+      // Generate static HTML and upload to S3/MinIO
+      try {
+        console.log(`[Publish] Generating HTML for profile ${profile.slug}...`);
+        
+        const html = generateProfileHtml(
+          {
+            slug: profile.slug,
+            name: profile.name,
+            bio: profile.bio,
+            avatarUrl: profile.avatarUrl,
+          },
+          profile.links.map((link) => ({
+            id: link.id,
+            url: link.url,
+            publishedTitle: link.draftTitle,
+            publishedDescription: link.draftDescription,
+            publishedImage: link.draftImage,
+          }))
+        );
+
+        console.log(`[Publish] Uploading HTML to S3 for ${profile.slug}...`);
+        const publishedUrl = await uploadHtml(profile.slug, html);
+
+        console.log(`[Publish] ✅ Successfully uploaded to ${publishedUrl}`);
+
+        // Update profile with published URL and generation
+        await prisma.profile.update({
+          where: { id: job.profileId! },
+          data: {
+            publishedGeneration: job.profile.publishGeneration,
+            publishedUrl: publishedUrl,
+            publishStatus: "IDLE",
+          },
+        });
+      } catch (uploadError) {
+        console.error(
+          `[Publish] ❌ Failed to generate/upload HTML for ${profile.slug}:`,
+          uploadError
+        );
+
+        // Handle retry logic with exponential backoff
+        const retryCount = job.retryCount + 1;
+        
+        if (retryCount <= MAX_RETRIES) {
+          // Calculate backoff: 2^retryCount seconds, capped at 60s
+          const backoffSeconds = Math.min(
+            Math.pow(2, retryCount),
+            MAX_BACKOFF_MS / 1000
+          );
+          const nextRetryAt = new Date(Date.now() + backoffSeconds * 1000);
+
+          console.log(
+            `[Publish] Scheduling retry ${retryCount}/${MAX_RETRIES} in ${backoffSeconds}s for job ${jobId}`
+          );
+
+          await prisma.job.update({
+            where: { id: jobId },
+            data: {
+              status: "FAILED",
+              error: uploadError instanceof Error ? uploadError.message : "Upload failed",
+              retryCount: retryCount,
+              nextRetryAt: nextRetryAt,
+            },
+          });
+
+          // Reset profile publish status so it can be retried
+          await prisma.profile.update({
+            where: { id: job.profileId! },
+            data: { publishStatus: "IDLE" },
+          });
+
+          // Schedule retry by setting status back to PENDING after delay
+          setTimeout(async () => {
+            try {
+              await prisma.job.update({
+                where: { id: jobId },
+                data: { status: "PENDING" },
+              });
+              console.log(`[Publish] Job ${jobId} marked PENDING for retry`);
+            } catch (error) {
+              console.error(`[Publish] Failed to schedule retry:`, error);
+            }
+          }, backoffSeconds * 1000);
+
+          return; // Exit without marking as completed
+        } else {
+          // Max retries exceeded
+          console.error(
+            `[Publish] ❌ Max retries (${MAX_RETRIES}) exceeded for job ${jobId}`
+          );
+
+          await prisma.job.update({
+            where: { id: jobId },
+            data: {
+              status: "FAILED",
+              error: `Max retries exceeded: ${uploadError instanceof Error ? uploadError.message : "Upload failed"}`,
+            },
+          });
+
+          await prisma.profile.update({
+            where: { id: job.profileId! },
+            data: { publishStatus: "IDLE" },
+          });
+
+          // Notify about permanent failure
+          try {
+            await axios.post(`${apiUrl}/api/jobs/${jobId}/notify`);
+          } catch (error) {
+            console.warn("Could not notify main server:", error);
+          }
+
+          return;
+        }
+      }
     }
 
-    // Update profile published generation
-    await prisma.profile.update({
-      where: { id: job.profileId! },
-      data: {
-        publishedGeneration: job.profile.publishGeneration,
-        publishStatus: "IDLE",
-      },
-    });
+    // If no upload error, update profile published generation (legacy path)
+    // This shouldn't execute if upload succeeds above, but kept for safety
+    if (!profile) {
+      await prisma.profile.update({
+        where: { id: job.profileId! },
+        data: {
+          publishedGeneration: job.profile.publishGeneration,
+          publishStatus: "IDLE",
+        },
+      });
+    }
 
     // Update job status
     await prisma.job.update({

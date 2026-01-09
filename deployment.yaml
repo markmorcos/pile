@@ -41,6 +41,18 @@ services:
       - name: CORS_ORIGIN
         value: https://pile.bio
 
+      - name: S3_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: pile-s3
+            key: S3_ACCESS_KEY
+
+      - name: S3_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: pile-s3
+            key: S3_SECRET_KEY
+
       - name: NODE_ENV
         value: production
 

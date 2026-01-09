@@ -40,7 +40,14 @@ services:
 
       - name: CORS_ORIGIN
         value: https://pile.bio
-
+      - name: S3_ENDPOINT
+        value: https://cdn.morcos.tech
+      - name: S3_BUCKET
+        value: pile
+      - name: S3_REGION
+        value: us-east-1
+      - name: S3_PUBLIC_URL
+        value: https://cdn.morcos.tech
       - name: S3_ACCESS_KEY
         valueFrom:
           secretKeyRef:
